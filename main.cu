@@ -22,7 +22,7 @@ void init_cpu(std::vector<float> &v_data, std::vector<int> &v_offset, std::vecto
     auto rand = std::bind(dis, gen);
     auto randf = std::bind(disf, gen);
     // receptor ok
-    std::generate(v_offset.begin()+1,v_offset.end(),[&](){return rand();});
+    std::generate(v_offset.begin()+1,v_offset.end(),[&](){return  rand();});
     std::copy(v_offset.begin()+1,v_offset.end(),v_size.begin());
     auto sum = std::accumulate(v_offset.begin(), v_offset.end(), 0);
     v_data.resize(sum);
@@ -63,31 +63,8 @@ __global__ void kernel_gpu_original( const float* __restrict__  p_data,const int
         }
     }
 }
-
-
-template<int N>
-__forceinline__ __device__ unsigned lane_id();
-
-template<>
-__forceinline__ __device__ unsigned lane_id<32>(){
- // unsigned ret;
- // asm volatile ("mov.u32 %0, %laneid;" : "=r"(ret));
- // return ret;
-    return threadIdx.x % 32;
-}
-
-template<>
-__forceinline__ __device__ unsigned lane_id<64>(){
-    return threadIdx.x % 64;
-}
-
-
-__forceinline__ __device__ unsigned warp_id(int size_swarp){
-    return threadIdx.x / size_swarp;
-}
-
-
 enum reduce {partial = 2, full = 32};
+
 
 //reduce a single hardware warp;
 template<class T>
@@ -101,12 +78,10 @@ __inline__ __device__ T warpReduceSum(T val, reduce r){
 //reduce several warp over a single block i.e. <1,64> : we have two warps
 template<class T>
 __inline__ __device__ T blockReduceSum(T val){
-    int warpid = warp_id(32); //number of the warp depend of the number of thread i.e. #threads/32
-    int laneid = lane_id<32>(); //threadId into the warp [0,32]
+    int warpid = threadIdx.x/32; //number of the warp depend of the number of thread i.e. #threads/32
+    int laneid = threadIdx.x%32; //threadId into the warp [0,32]
 
     __shared__ T shared[32]; //32 because hardware size
-    if(threadIdx.x < 32) shared[threadIdx.x]= 0;
-    __syncthreads();
 
     val = warpReduceSum(val,full); // each warp is doing partial reduction
     
@@ -125,22 +100,17 @@ __inline__ __device__ T blockReduceSum(T val){
 __global__ void kernel_gpu_64( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
     float data_for_reduction = 0;
     int global_blockDim = blockIdx.x*blockDim.x;
-    int tid = (blockIdx.x*blockDim.x+threadIdx.x);
+    const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
 
     #pragma unroll
     for (int in = tid; in/64 < size_res; in += (blockDim.x * gridDim.x)) {
  
-        int global_warpid_64 = in/64;
-        int global_laneid_32 = in%32;
-        int global_laneid_64 = in%64;
+        const int global_warpid_64 = in/64;
+        const int global_laneid_64 = in%64;
         
-        //value for the size of each receptor
-        int size_receptor;
-        // value for the offset
-        int offset_value;
         //get the value from the offset only the thread 0 (lane id) of the warp
-        offset_value = p_offset[global_warpid_64];
-        size_receptor = p_size[global_warpid_64];
+        const int offset_value = p_offset[global_warpid_64];
+        const int size_receptor = p_size[global_warpid_64];
         
         //get the correct indices with the offset and the lane id (NOT tid)
         int offset_id = global_laneid_64 + offset_value;
@@ -149,7 +119,7 @@ __global__ void kernel_gpu_64( const float* __restrict__ p_data, const int* __re
            data_for_reduction = p_data[offset_id];
         }
         
-        auto tmp = blockReduceSum(data_for_reduction);
+        auto tmp =  blockReduceSum(data_for_reduction);
        
         if(threadIdx.x < blockDim.x/64){
             int tid_final = (global_blockDim/64+threadIdx.x);
