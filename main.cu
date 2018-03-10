@@ -31,8 +31,6 @@ void init_cpu(std::vector<float> &v_data, std::vector<int> &v_offset, std::vecto
 //  std::fill(v_data.begin(),v_data.end(),1.1);
 //  std::iota(v_data.begin(),v_data.end(),0);
 
-
-
     int end = v_offset[0];
     for(int i(0); i < v_offset.size(); ++i){
         v_offset[i] = end;
@@ -127,6 +125,7 @@ __global__ void kernel_gpu_64( const float* __restrict__ p_data, const int* __re
     float data_for_reduction = 0;
     int global_blockDim = blockIdx.x*blockDim.x;
     int tid = (blockIdx.x*blockDim.x+threadIdx.x);
+
     #pragma unroll
     for (int in = tid; in/64 < size_res; in += (blockDim.x * gridDim.x)) {
  
@@ -139,20 +138,14 @@ __global__ void kernel_gpu_64( const float* __restrict__ p_data, const int* __re
         // value for the offset
         int offset_value;
         //get the value from the offset only the thread 0 (lane id) of the warp
-        if((global_laneid_32 == 0) && (global_warpid_64 < size_res)){
-            offset_value = p_offset[global_warpid_64];
-            size_receptor = p_size[global_warpid_64];
-        }
+        offset_value = p_offset[global_warpid_64];
+        size_receptor = p_size[global_warpid_64];
         
-        //broadcast the value from lane id 0 to all lane id of the warp
-        offset_value = __shfl(offset_value,0); 
-        size_receptor =  __shfl(size_receptor,0);
         //get the correct indices with the offset and the lane id (NOT tid)
         int offset_id = global_laneid_64 + offset_value;
-        
         // branching to avoid overflow over all the data
         if(offset_id < size_data ){
-            data_for_reduction = p_data[offset_id];
+           data_for_reduction = p_data[offset_id];
             if(tid%64 >= size_receptor){
                 data_for_reduction = 0;
             }
@@ -246,7 +239,7 @@ int main(int argc, const char * argv[]) {
     std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout  << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
- //for(int i = 0 ; i < size-1; ++i)
+// for(int i = 0 ; i < size-1; ++i)
 //     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
 
     // insert code here...
