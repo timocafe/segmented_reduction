@@ -202,16 +202,40 @@ int main(int argc, const char * argv[]) {
     cudaMemcpy(p_data,&v_data[0],v_data.size()*sizeof(float),cudaMemcpyHostToDevice);
     cudaMemcpy(p_res,&v_res_gpu[0],v_res_gpu.size()*sizeof(float),cudaMemcpyHostToDevice);
 
-    auto start =  std::chrono::high_resolution_clock::now();
+    auto start =    std::chrono::high_resolution_clock::now();
     kernel_cpu(v_data,v_offset,v_res);
-    auto end =  std::chrono::high_resolution_clock::now();
+    auto end =   std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed_seconds = end-start;
 
+    cudaEvent_t start_original, stop_original;
+    cudaEvent_t start_64, stop_64;
+    cudaEventCreate(&start_original);
+    cudaEventCreate(&start_64);
+    cudaEventCreate(&stop_original);
+    cudaEventCreate(&stop_64);
+
+    cudaEventRecord(start_original);
     kernel_gpu_original<<<block,thread>>>(p_data,p_offset,p_res,v_data.size(),v_res.size());
+    cudaEventRecord(stop_original); 
+ 
     cudaMemcpy(&v_res_gpu[0],p_res,v_res_gpu.size()*sizeof(float),cudaMemcpyDeviceToHost);
     cudaMemset(p_res,0,v_res_gpu.size()*sizeof(float));
+
+
+    cudaEventRecord(start_64);
     kernel_gpu_64<<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
+    cudaEventRecord(stop_64); 
+
     cudaMemcpy(&v_res_gpu2[0],p_res,v_res_gpu2.size()*sizeof(float),cudaMemcpyDeviceToHost);
+
+    cudaEventSynchronize(stop_original);
+    cudaEventSynchronize(stop_64);
+  
+   float milliseconds_original = 0;
+   float milliseconds_64 = 0;
+
+   cudaEventElapsedTime(&milliseconds_original, start_original, stop_original);
+   cudaEventElapsedTime(&milliseconds_64, start_64, stop_64);
 
     auto sum_cpu = std::accumulate(v_res.begin(), v_res.end(), 0.);
     auto sum_gpu_original = std::accumulate(v_res_gpu.begin(), v_res_gpu.end(), 0.);
@@ -222,6 +246,6 @@ int main(int argc, const char * argv[]) {
 //     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
 
     // insert code here...
-    std::cout << "time " << elapsed_seconds.count() << " [s] \n";
+    std::cout << "time cpu:" << elapsed_seconds.count()*1000 << " [ms], gpu original " << milliseconds_original << " [ms], gpu tune " << milliseconds_64  << " [ms] \n ";
     return 0;
 }
