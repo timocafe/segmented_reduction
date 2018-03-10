@@ -52,7 +52,7 @@ void kernel_cpu(std::vector<float> &v_data, std::vector<int> &v_offset, std::vec
 
 
 
-__global__ void kernel_gpu_original(float* p_data, int* p_offset, float* p_res, int size_data, int size_res){
+__global__ void kernel_gpu_original( const float* __restrict__  p_data,const int* __restrict__ p_offset, float* __restrict__ p_res, int size_data, int size_res){
 
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     #pragma unroll
@@ -123,7 +123,7 @@ __device__ T blockReduceSum(T val){
     return val;
 }
 
-__global__ void kernel_gpu_64(float* p_data, int* p_offset, int* p_size, float* p_res, int size_data, int size_res){
+__global__ void kernel_gpu_64( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
     float data_for_reduction = 0;
     int global_blockDim = blockIdx.x*blockDim.x;
     int tid = (blockIdx.x*blockDim.x+threadIdx.x);
@@ -241,6 +241,10 @@ int main(int argc, const char * argv[]) {
     auto sum_gpu_original = std::accumulate(v_res_gpu.begin(), v_res_gpu.end(), 0.);
     auto sum_gpu_tune = std::accumulate(v_res_gpu2.begin(), v_res_gpu2.end(), 0.);
 
+    std::cout << " memory allocated : data " << v_data.size()*sizeof(float)/1048576. << " [mB]\n ";
+    std::cout << " memory allocated : offset " << v_offset.size()*sizeof(float)/1048576. << " [mB]\n ";
+    std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
+    std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout  << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
  //for(int i = 0 ; i < size-1; ++i)
 //     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
