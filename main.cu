@@ -100,7 +100,7 @@ __inline__ __device__ T warpReduceSum(T val, reduce r){
 
 //reduce several warp over a single block i.e. <1,64> : we have two warps
 template<class T>
-__device__ T blockReduceSum(T val){
+__inline__ __device__ T blockReduceSum(T val){
     int warpid = warp_id(32); //number of the warp depend of the number of thread i.e. #threads/32
     int laneid = lane_id<32>(); //threadId into the warp [0,32]
 
@@ -109,7 +109,7 @@ __device__ T blockReduceSum(T val){
     __syncthreads();
 
     val = warpReduceSum(val,full); // each warp is doing partial reduction
-
+    
     if(laneid==0) shared[warpid] = val; // Write reduce sum in shared mem.
     __syncthreads();
 
@@ -118,6 +118,7 @@ __device__ T blockReduceSum(T val){
     __syncthreads();
     val = warpReduceSum(val,partial); // if 64 partial
     val = __shfl(val,threadIdx.x*2); // A B C D E F G H becomes A C D F ...
+
     return val;
 }
 
@@ -144,11 +145,8 @@ __global__ void kernel_gpu_64( const float* __restrict__ p_data, const int* __re
         //get the correct indices with the offset and the lane id (NOT tid)
         int offset_id = global_laneid_64 + offset_value;
         // branching to avoid overflow over all the data
-        if(offset_id < size_data ){
+        if(offset_id < size_data && tid%64 < size_receptor ){
            data_for_reduction = p_data[offset_id];
-            if(tid%64 >= size_receptor){
-                data_for_reduction = 0;
-            }
         }
         
         auto tmp = blockReduceSum(data_for_reduction);
@@ -158,6 +156,7 @@ __global__ void kernel_gpu_64( const float* __restrict__ p_data, const int* __re
             p_res[tid_final] = tmp; // it will sum 0
         }
         global_blockDim += blockDim.x * gridDim.x; 
+        data_for_reduction = 0; // reset for next term
     }
 }
 
@@ -238,11 +237,11 @@ int main(int argc, const char * argv[]) {
     std::cout << " memory allocated : offset " << v_offset.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
-    std::cout  << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
+    std::cout << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
 // for(int i = 0 ; i < size-1; ++i)
 //     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
 
     // insert code here...
-    std::cout << "time cpu:" << elapsed_seconds.count()*1000 << " [ms], gpu original " << milliseconds_original << " [ms], gpu tune " << milliseconds_64  << " [ms] \n ";
+    std::cout << " time cpu:" << elapsed_seconds.count()*1000 << " [ms], gpu original " << milliseconds_original << " [ms], gpu tune " << milliseconds_64  << " [ms] \n ";
     return 0;
 }
