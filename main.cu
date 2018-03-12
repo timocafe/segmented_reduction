@@ -17,7 +17,7 @@
 void init_cpu(std::vector<float> &v_data, std::vector<int> &v_offset, std::vector<int> &v_size){
     std::random_device rd;  //Will be used to obtain a seed for the random number engine
     std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
-    std::uniform_int_distribution<> dis(1, 31); // 64 max element
+    std::uniform_int_distribution<> dis(1, 63); // 64 max element
     std::uniform_real_distribution<> disf(1, 10); // 100 max element
     auto rand = std::bind(dis, gen);
     auto randf = std::bind(disf, gen);
@@ -113,8 +113,8 @@ static __inline__ __device__ T blockReduceSum(T val){
     val = warpReduceSum(val,full); // each warp is doing partial reduction
     if(laneid==0) shared[warpid] = val; // Write reduce sum in shared mem.
     __syncthreads();
-
-    return shared[warpid];
+    val = (threadIdx.x < blockDim.x / warpSize) ? shared[laneid] : 0;
+    return shared[laneid];
     }
 };
 
@@ -141,7 +141,7 @@ __global__ void kernel_gpu( const float* __restrict__ p_data, const int* __restr
         // branching to avoid overflow over all the data
         (offset_id < size_data && tid%N < size_receptor ) ? data_for_reduction = p_data[offset_id] : data_for_reduction = 0;
         
-        auto tmp =  blockReduceSumHelper<float,64>::blockReduceSum(data_for_reduction);
+        auto tmp =  blockReduceSumHelper<float,N>::blockReduceSum(data_for_reduction);
        
         if(threadIdx.x < blockDim.x/N){
             int tid_final = (global_blockDim/N+threadIdx.x);
@@ -228,8 +228,8 @@ int main(int argc, const char * argv[]) {
     std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
-    for(int i = 0 ; i < size-1; ++i)
-       std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
+//  for(int i = 0 ; i < size-1; ++i)
+//     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
 
     // insert code here...
     std::cout << " time cpu:" << elapsed_seconds.count()*1000 << " [ms], gpu original " << milliseconds_original << " [ms], gpu tune " << milliseconds_64  << " [ms] \n ";
