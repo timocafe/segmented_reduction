@@ -71,64 +71,78 @@ template<class T>
 __inline__ __device__ T warpReduceSum(T val, reduce r){
     #pragma unroll
     for(int i = 1; i < r; i *= 2)
-        val += __shfl_xor(val, i);
+        val += __shfl_xor_sync(0xffffffff,val, i, 32);
     return val;
 }
 
 //reduce several warp over a single block i.e. <1,64> : we have two warps
+template<class T, int N>
+struct blockReduceSumHelper;
+
+//partial for number belong [0,64[
 template<class T>
-__inline__ __device__ T blockReduceSum(T val){
-    int warpid = threadIdx.x/32; //number of the warp depend of the number of thread i.e. #threads/32
-    int laneid = threadIdx.x%32; //threadId into the warp [0,32]
+struct blockReduceSumHelper<T,64>{
+static __inline__ __device__ T blockReduceSum(T val){
+        int warpid = threadIdx.x/32; //number of the warp depend of the number of thread i.e. #threads/32
+        int laneid = threadIdx.x%32; //threadId into the warp [0,32]
 
-    __shared__ T shared[32]; //32 because hardware size
+        __shared__ T shared[32]; //32 because hardware size
 
-    val = warpReduceSum(val,full); // each warp is doing partial reduction
+        val = warpReduceSum(val,full); // each warp is doing partial reduction
     
-    if(laneid==0) shared[warpid] = val; // Write reduce sum in shared mem.
-    __syncthreads();
+        if(laneid==0) shared[warpid] = val; // Write reduce sum in shared mem.
+        __syncthreads();
 
-    //read from shared mem only if that warp existed
-    val = (threadIdx.x < blockDim.x / warpSize) ? shared[laneid] : 0;
-    val = warpReduceSum(val,partial); // if 64 partial
-    val = __shfl(val,threadIdx.x*2); // A B C D E F G H becomes A C D F ...
+        //read from shared mem only if that warp existed
+        val = (threadIdx.x < blockDim.x / warpSize) ? shared[laneid] : 0;
+        val = warpReduceSum(val,partial); // if 64 partial
+        val = __shfl_sync(0xffffffff,val,threadIdx.x*2, 32); // A B C D E F G H becomes A C D F ...
 
-    return val;
-}
+        return val;
+    }
+};
 
-__global__ void kernel_gpu_64( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
+//partial for number belong [0,31[
+template<class T>
+struct blockReduceSumHelper<T,32>{
+static __inline__ __device__ T blockReduceSum(T val){
+        val = warpReduceSum(val,full); // each warp is doing partial reduction
+        return val;
+    }
+};
+
+
+template<int N>
+__global__ void kernel_gpu( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
     float data_for_reduction = 0;
     int global_blockDim = blockIdx.x*blockDim.x;
     const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
 
     #pragma unroll
-    for (int in = tid; in/64 < size_res; in += (blockDim.x * gridDim.x)) {
+    for (int in = tid; in/N < size_res; in += (blockDim.x * gridDim.x)) {
  
-        const int global_warpid_64 = in/64;
-        const int global_laneid_64 = in%64;
+        const int global_warpid_N = in/N;
+        const int global_laneid_N = in%N;
         
         //get the value from the offset only the thread 0 (lane id) of the warp
-        const int offset_value = p_offset[global_warpid_64];
-        const int size_receptor = p_size[global_warpid_64];
+        const int offset_value = p_offset[global_warpid_N];
+        const int size_receptor = p_size[global_warpid_N];
         
         //get the correct indices with the offset and the lane id (NOT tid)
-        int offset_id = global_laneid_64 + offset_value;
+        int offset_id = global_laneid_N + offset_value;
+
         // branching to avoid overflow over all the data
-        if(offset_id < size_data && tid%64 < size_receptor ){
-           data_for_reduction = p_data[offset_id];
-        }
+        (offset_id < size_data && tid%N < size_receptor ) ? data_for_reduction = p_data[offset_id] : data_for_reduction = 0;
         
-        auto tmp =  blockReduceSum(data_for_reduction);
+        auto tmp =  blockReduceSumHelper<float,64>::blockReduceSum(data_for_reduction);
        
-        if(threadIdx.x < blockDim.x/64){
-            int tid_final = (global_blockDim/64+threadIdx.x);
+        if(threadIdx.x < blockDim.x/N){
+            int tid_final = (global_blockDim/N+threadIdx.x);
             p_res[tid_final] = tmp; // it will sum 0
         }
         global_blockDim += blockDim.x * gridDim.x; 
-        data_for_reduction = 0; // reset for next term
     }
 }
-
 
 int main(int argc, const char * argv[]) {
     int size = atoi(argv[1]);
@@ -184,7 +198,7 @@ int main(int argc, const char * argv[]) {
 
 
     cudaEventRecord(start_64);
-    kernel_gpu_64<<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
+    kernel_gpu<64><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
     cudaEventRecord(stop_64); 
 
     cudaMemcpy(&v_res_gpu2[0],p_res,v_res_gpu2.size()*sizeof(float),cudaMemcpyDeviceToHost);
