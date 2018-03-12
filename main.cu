@@ -90,7 +90,6 @@ __inline__ __device__ T blockReduceSum(T val){
 
     //read from shared mem only if that warp existed
     val = (threadIdx.x < blockDim.x / warpSize) ? shared[laneid] : 0;
-    __syncthreads();
     val = warpReduceSum(val,partial); // if 64 partial
     val = __shfl(val,threadIdx.x*2); // A B C D E F G H becomes A C D F ...
 
