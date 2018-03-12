@@ -17,7 +17,7 @@
 void init_cpu(std::vector<float> &v_data, std::vector<int> &v_offset, std::vector<int> &v_size){
     std::random_device rd;  //Will be used to obtain a seed for the random number engine
     std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
-    std::uniform_int_distribution<> dis(1, 63); // 64 max element
+    std::uniform_int_distribution<> dis(1, 31); // 64 max element
     std::uniform_real_distribution<> disf(1, 10); // 100 max element
     auto rand = std::bind(dis, gen);
     auto randf = std::bind(disf, gen);
@@ -106,8 +106,15 @@ static __inline__ __device__ T blockReduceSum(T val){
 template<class T>
 struct blockReduceSumHelper<T,32>{
 static __inline__ __device__ T blockReduceSum(T val){
-        val = warpReduceSum(val,full); // each warp is doing partial reduction
-        return val;
+    int warpid = threadIdx.x/32; //number of the warp depend of the number of thread i.e. #threads/32
+    int laneid = threadIdx.x%32; //threadId into the warp [0,32]
+
+    __shared__ T shared[32]; //32 because hardware size
+    val = warpReduceSum(val,full); // each warp is doing partial reduction
+    if(laneid==0) shared[warpid] = val; // Write reduce sum in shared mem.
+    __syncthreads();
+
+    return shared[warpid];
     }
 };
 
@@ -221,8 +228,8 @@ int main(int argc, const char * argv[]) {
     std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
-// for(int i = 0 ; i < size-1; ++i)
-//     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
+    for(int i = 0 ; i < size-1; ++i)
+       std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
 
     // insert code here...
     std::cout << " time cpu:" << elapsed_seconds.count()*1000 << " [ms], gpu original " << milliseconds_original << " [ms], gpu tune " << milliseconds_64  << " [ms] \n ";
