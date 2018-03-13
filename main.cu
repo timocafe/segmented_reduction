@@ -28,7 +28,7 @@ void init_cpu(std::vector<float> &v_data, std::vector<int> &v_offset, std::vecto
     v_data.resize(sum);
     // the data
     std::generate(v_data.begin(),v_data.end(),[&](){return randf();});
-    std::fill(v_data.begin(),v_data.end(),1);
+//  std::fill(v_data.begin(),v_data.end(),1);
 //  std::iota(v_data.begin(),v_data.end(),0);
 
     int end = v_offset[0];
@@ -122,38 +122,30 @@ __global__ void kernel_gpu_tune( const float* __restrict__ p_data, const int* __
     int global_blockDim = blockIdx.x*blockDim.x;
     const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
 
-    const int max_reduction_size = 64;
-    const int max_threads_per_warps = 32;
- 
-    for (int in = tid; in/max_reduction_size  < size_res; in += (blockDim.x * gridDim.x)) {
+    for (int in = tid; in/32  < size_res; in += (blockDim.x * gridDim.x)) {
     
-        const int warpid = in/max_reduction_size;
-        const int laneid = in%max_reduction_size;
+        const int warpid = in/32;
+        const int laneid = in%32;
 
         //get the value from the offset only the thread 0 (lane id) of the warp
         const int offset_value = p_offset[warpid];
         const int size_receptor = p_size[warpid];
      
         int offset_id = laneid + offset_value;
-        #pragma unroll  
+        #pragma unroll 2 
         for (int j = 0; j < 2  ; ++j){
-            (offset_id < size_data && tid%max_reduction_size < size_receptor ) ? data_for_reduction += p_data[offset_id] : 0;
-            offset_id += max_threads_per_warps;
+            (offset_id < offset_value+size_receptor) ? data_for_reduction += p_data[offset_id] : 0;
+            offset_id += 32;
         }
 
-        printf("data %f: \n",data_for_reduction); 
- 
-        auto tmp =  blockReduceSumHelper<float,32>::blockReduceSum(data_for_reduction);
+        float tmp =  blockReduceSumHelper<float,32>::blockReduceSum(data_for_reduction);
       
-    
-        printf("tmp %f: \n",tmp); 
  
- //     if(threadIdx.x < blockDim.x/64){
-           int tid_final = (global_blockDim/64+threadIdx.x);
-           printf(" td_final %d %d \n", tid_final, threadIdx.x);
+        if(threadIdx.x < blockDim.x/32){
+           int tid_final = (global_blockDim/32+threadIdx.x);
             if(tid_final < size_res)
                 p_res[tid_final] = tmp; // it will sum 0
-//      }
+        }
         global_blockDim += blockDim.x * gridDim.x; 
         data_for_reduction = 0;
     }
@@ -165,6 +157,7 @@ __global__ void kernel_gpu( const float* __restrict__ p_data, const int* __restr
     int global_blockDim = blockIdx.x*blockDim.x;
     const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
 
+   
  
     for (int in = tid; in/N < size_res; in += (blockDim.x * gridDim.x)) {
     
@@ -270,8 +263,8 @@ int main(int argc, const char * argv[]) {
     std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
-    for(int i = 0 ; i < size-1; ++i)
-       std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
+//  for(int i = 0 ; i < size-1; ++i)
+//     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
 
     // insert code here...
     std::cout << " time cpu:" << elapsed_seconds.count()*1000 << " [ms], gpu original " << milliseconds_original << " [ms], gpu tune " << milliseconds_64  << " [ms] \n ";
