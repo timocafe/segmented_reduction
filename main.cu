@@ -53,14 +53,12 @@ void kernel_cpu(std::vector<float> &v_data, std::vector<int> &v_offset, std::vec
 __global__ void kernel_gpu_original( const float* __restrict__  p_data,const int* __restrict__ p_offset, float* __restrict__ p_res, int size_data, int size_res){
 
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    #pragma unroll
+
     for (int ir  = tid; ir < size_res; ir += blockDim.x * gridDim.x) {
-        if(ir < size_res){
             auto begin = p_offset[ir];
-            auto end = p_offset[ir+1];
-            for(int j = begin; j < end; ++j)
+            auto end =  p_offset[ir+1];
+            for(auto j = begin; j < end; ++j)
                 p_res[ir] += p_data[j];
-        }
     }
 }
 enum reduce {partial = 2, full = 32};
@@ -125,9 +123,9 @@ __global__ void kernel_gpu( const float* __restrict__ p_data, const int* __restr
     int global_blockDim = blockIdx.x*blockDim.x;
     const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
 
-    #pragma unroll
-    for (int in = tid; in/N < size_res; in += (blockDim.x * gridDim.x)) {
  
+    for (int in = tid; in/N < size_res; in += (blockDim.x * gridDim.x)) {
+    
         const int global_warpid_N = in/N;
         const int global_laneid_N = in%N;
         
@@ -137,7 +135,7 @@ __global__ void kernel_gpu( const float* __restrict__ p_data, const int* __restr
         
         //get the correct indices with the offset and the lane id (NOT tid)
         int offset_id = global_laneid_N + offset_value;
-
+    
         // branching to avoid overflow over all the data
         (offset_id < size_data && tid%N < size_receptor ) ? data_for_reduction = p_data[offset_id] : data_for_reduction = 0;
         
@@ -145,7 +143,8 @@ __global__ void kernel_gpu( const float* __restrict__ p_data, const int* __restr
        
         if(threadIdx.x < blockDim.x/N){
             int tid_final = (global_blockDim/N+threadIdx.x);
-            p_res[tid_final] = tmp; // it will sum 0
+            if(tid_final < size_res)
+                p_res[tid_final] = tmp; // it will sum 0
         }
         global_blockDim += blockDim.x * gridDim.x; 
     }
