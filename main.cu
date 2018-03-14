@@ -73,115 +73,36 @@ __inline__ __device__ T warpReduceSum(T val, reduce r){
     return val;
 }
 
-//reduce several warp over a single block i.e. <1,64> : we have two warps
-template<class T, int N>
-struct blockReduceSumHelper;
 
-//partial for number belong [0,64[
-template<class T>
-struct blockReduceSumHelper<T,64>{
-static __inline__ __device__ T blockReduceSum(T val){
-        int warpid = threadIdx.x/32; //number of the warp depend of the number of thread i.e. #threads/32
-        int laneid = threadIdx.x%32; //threadId into the warp [0,32]
+__forceinline__ __device__ unsigned lane_id()
+{
+    unsigned ret; 
+    asm volatile ("mov.u32 %0, %laneid;" : "=r"(ret));
+    return ret;
+}
 
-        __shared__ T shared[32]; //32 because hardware size
-
-        val = warpReduceSum(val,full); // each warp is doing partial reduction
-    
-        if(laneid==0) shared[warpid] = val; // Write reduce sum in shared mem.
-        __syncthreads();
-
-        //read from shared mem only if that warp existed
-        val = (threadIdx.x < blockDim.x / warpSize) ? shared[laneid] : 0;
-        val = warpReduceSum(val,partial); // if 64 partial
-        val = __shfl_sync(0xffffffff,val,threadIdx.x*2, 32); // A B C D E F G H becomes A C D F ...
-
-        return val;
-    }
-};
-
-//partial for number belong [0,31[
-template<class T>
-struct blockReduceSumHelper<T,32>{
-static __inline__ __device__ T blockReduceSum(T val){
-    int warpid = threadIdx.x/32; //number of the warp depend of the number of thread i.e. #threads/32
-    int laneid = threadIdx.x%32; //threadId into the warp [0,32]
-
-    __shared__ T shared[32]; //32 because hardware size
-    val = warpReduceSum(val,full); // each warp is doing partial reduction
-    if(laneid==0) shared[warpid] = val; // Write reduce sum in shared mem.
-    __syncthreads();
-    val = (threadIdx.x < blockDim.x / warpSize) ? shared[laneid] : 0;
-//  printf("line, val %d %f \n", laneid, shared[laneid]);
-    return shared[laneid];
-    }
-};
 
 __global__ void kernel_gpu_tune( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
     float data_for_reduction = 0;
-    int global_blockDim = blockIdx.x*blockDim.x;
     const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
 
-    for (int in = tid; in/32  < size_res; in += (blockDim.x * gridDim.x)) {
+    for (int in = tid; in  < 32*size_res; in += (blockDim.x * gridDim.x)) {
     
         const int warpid = in/32;
-        const int laneid = in%32;
+        const int laneid = lane_id();
 
         //get the value from the offset only the thread 0 (lane id) of the warp
         const int offset_value = p_offset[warpid];
         const int size_receptor = p_size[warpid];
      
-        int offset_id = laneid + offset_value;
-        #pragma unroll 2 
-        for (int j = 0; j < 2  ; ++j){
-            (offset_id < offset_value+size_receptor) ? data_for_reduction += p_data[offset_id] : 0;
-            offset_id += 32;
-        }
+        const int offset_id = laneid + offset_value;
 
-        float tmp =  blockReduceSumHelper<float,32>::blockReduceSum(data_for_reduction);
-      
- 
-        if(threadIdx.x < blockDim.x/32){
-           int tid_final = (global_blockDim/32+threadIdx.x);
-            if(tid_final < size_res)
-                p_res[tid_final] = tmp; // it will sum 0
-        }
-        global_blockDim += blockDim.x * gridDim.x; 
-        data_for_reduction = 0;
-    }
-}
+        data_for_reduction = (offset_id < offset_value+size_receptor) ? p_data[offset_id] : 0;
+        data_for_reduction += (offset_id + 32 < offset_value+size_receptor) ? p_data[offset_id + 32] : 0;
 
-template<int N>
-__global__ void kernel_gpu( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
-    float data_for_reduction = 0;
-    int global_blockDim = blockIdx.x*blockDim.x;
-    const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
+        auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
 
-   
- 
-    for (int in = tid; in/N < size_res; in += (blockDim.x * gridDim.x)) {
-    
-        const int global_warpid_N = in/N;
-        const int global_laneid_N = in%N;
-        
-        //get the value from the offset only the thread 0 (lane id) of the warp
-        const int offset_value = p_offset[global_warpid_N];
-        const int size_receptor = p_size[global_warpid_N];
-        
-        //get the correct indices with the offset and the lane id (NOT tid)
-        int offset_id = global_laneid_N + offset_value;
-    
-        // branching to avoid overflow over all the data
-        (offset_id < size_data && tid%N < size_receptor ) ? data_for_reduction = p_data[offset_id] : data_for_reduction = 0;
-        
-        auto tmp =  blockReduceSumHelper<float,N>::blockReduceSum(data_for_reduction);
-       
-        if(threadIdx.x < blockDim.x/N){
-            int tid_final = (global_blockDim/N+threadIdx.x);
-            if(tid_final < size_res)
-                p_res[tid_final] = tmp; // it will sum 0
-        }
-        global_blockDim += blockDim.x * gridDim.x; 
+        p_res[warpid] = r; 
     }
 }
 
@@ -239,7 +160,6 @@ int main(int argc, const char * argv[]) {
 
 
     cudaEventRecord(start_64);
-  //kernel_gpu<64><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
     kernel_gpu_tune<<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
     cudaEventRecord(stop_64); 
 
@@ -263,6 +183,7 @@ int main(int argc, const char * argv[]) {
     std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
     std::cout << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
+
 //  for(int i = 0 ; i < size-1; ++i)
 //     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
 
