@@ -14,15 +14,15 @@
 #include <functional>
 #include <cassert>
 
-void init_cpu(std::vector<float> &v_data, std::vector<int> &v_offset, std::vector<int> &v_size){
+void init_cpu(std::vector<float> &v_data, std::vector<int> &v_offset, std::vector<int> &v_size, int min, int max){
     std::random_device rd;  //Will be used to obtain a seed for the random number engine
     std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
-    std::uniform_int_distribution<> dis(1, 63); // 64 max element
+    std::uniform_int_distribution<> dis(min, max); // 64 max element
     std::uniform_real_distribution<> disf(1, 10); // 100 max element
     auto rand = std::bind(dis, gen);
     auto randf = std::bind(disf, gen);
     // receptor ok
-    std::generate(v_offset.begin()+1,v_offset.end(),[&](){return  rand();});
+    std::generate(v_offset.begin()+1,v_offset.end(),[&](){return rand();});
     std::copy(v_offset.begin()+1,v_offset.end(),v_size.begin());
     auto sum = std::accumulate(v_offset.begin(), v_offset.end(), 0);
     v_data.resize(sum);
@@ -107,9 +107,11 @@ __global__ void kernel_gpu_tune( const float* __restrict__ p_data, const int* __
 }
 
 int main(int argc, const char * argv[]) {
-    int size = atoi(argv[1]);
-    int thread = atoi(argv[2]);
-    int block = atoi(argv[3]);
+    int size = 36000;// atoi(argv[1]);
+    int thread = 256; // atoi(argv[2]);
+    int block = 256; // atoi(argv[3]);
+    int min = atoi(argv[1]);
+    int max = atoi(argv[2]);
     // cpu
     std::vector<int> v_offset(size);
     std::vector<int> v_size(size-1);
@@ -117,7 +119,7 @@ int main(int argc, const char * argv[]) {
     std::vector<float> v_res(size-1);
     std::vector<float> v_res_gpu(size-1);
     std::vector<float> v_res_gpu2(size-1);
-    init_cpu(v_data,v_offset,v_size);
+    init_cpu(v_data,v_offset,v_size, min, max);
 
 
     //gpu
@@ -127,7 +129,7 @@ int main(int argc, const char * argv[]) {
     float* p_res;
 
 
-       std::cout << " size data " << v_data.size() << " \n";
+   //  std::cout << " size data " << v_data.size() << " \n";
 
     cudaMalloc((void**)&p_offset, v_offset.size()*sizeof(int));
     cudaMalloc((void**)&p_size, v_offset.size()*sizeof(int));
@@ -178,11 +180,11 @@ int main(int argc, const char * argv[]) {
     auto sum_gpu_original = std::accumulate(v_res_gpu.begin(), v_res_gpu.end(), 0.);
     auto sum_gpu_tune = std::accumulate(v_res_gpu2.begin(), v_res_gpu2.end(), 0.);
 
-    std::cout << " memory allocated : data " << v_data.size()*sizeof(float)/1048576. << " [mB]\n ";
-    std::cout << " memory allocated : offset " << v_offset.size()*sizeof(float)/1048576. << " [mB]\n ";
-    std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
-    std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
-    std::cout << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
+//  std::cout << " memory allocated : data " << v_data.size()*sizeof(float)/1048576. << " [mB]\n ";
+//  std::cout << " memory allocated : offset " << v_offset.size()*sizeof(float)/1048576. << " [mB]\n ";
+//  std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
+//  std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
+//  std::cout << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
 
 //  for(int i = 0 ; i < size-1; ++i)
 //     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
