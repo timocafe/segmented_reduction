@@ -63,7 +63,6 @@ __global__ void kernel_gpu_original( const float* __restrict__  p_data,const int
 }
 enum reduce {partial = 2, full = 32};
 
-
 //reduce a single hardware warp;
 template<class T>
 __inline__ __device__ T warpReduceSum(T val, reduce r){
@@ -84,40 +83,39 @@ __forceinline__ __device__ unsigned lane_id()
 
 template<int N>
 __global__ void kernel_gpu_tune( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res);
-/*
-template<>
-__global__ void kernel_gpu_tune<32>( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
+  
+__global__ void kernel_gpu_shared( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
     float data_for_reduction = 0;
-    const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
-    const int size_buffer_shared_memory = 16384;
-    __shared__ float sdata[size_buffer_shared_memory]; // 256 * 64
-
-    int n_tid = tid; // first iteration we start at 0
-   
+    const int tid = (blockDim.x*blockIdx.x+threadIdx.x);
     const int block_by_grid_dim = blockDim.x * gridDim.x;
 
+
+    int num_block = blockDim.x * blockIdx.x; // car sum < 32 sur cette example
+
+    const int size_buffer_shared_memory = 256;
+    __shared__ float s_data[size_buffer_shared_memory]; // 
+
     for (int in = tid; in  < 32*size_res; in += block_by_grid_dim) {
-    
-        const int warpid = in/32;
-        const int laneid = lane_id();
+            int offset_block = p_offset[num_block/32];
+            const int warpid = in/32;
+            const int laneid = lane_id();
+            //get the value from the offset only the thread 0 (lane id) of the warp
+            const int offset_value = p_offset[warpid];
+            const int size_receptor = p_size[warpid];
+            const int offset_id = (laneid + offset_value - offset_block);
 
-        //get the value from the offset only the thread 0 (lane id) of the warp
-        const int offset_value = p_offset[warpid];
-        const int size_receptor = p_size[warpid];
-        const int offset_id = (laneid + offset_value);
-
-        sdata[tid] = p_data[n_tid];
-        __syncthreads();   
- 
-        data_for_reduction = (laneid < size_receptor) ? s_data[offset_id] : 0;
-
-        auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
-
-        p_res[warpid] = r; 
-        n_tid = ????;
+            s_data[threadIdx.x] = p_data[threadIdx.x+offset_block];
+            
+            data_for_reduction = (laneid < size_receptor) ? s_data[offset_id] : 0;
+            
+            __syncthreads();   
+            auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
+            
+            p_res[warpid] = r; 
+            num_block += block_by_grid_dim;
     }
 }
-*/
+  
 template<>
 __global__ void kernel_gpu_tune<32>( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
     float data_for_reduction = 0;
@@ -136,7 +134,7 @@ __global__ void kernel_gpu_tune<32>( const float* __restrict__ p_data, const int
 
         data_for_reduction = (laneid < size_receptor) ? p_data[offset_id] : 0;
 
-        auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
+        const float r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
 
         p_res[warpid] = r; 
     }
@@ -161,7 +159,7 @@ __global__ void kernel_gpu_tune<64>( const float* __restrict__ p_data, const int
         data_for_reduction = (laneid < size_receptor) ? p_data[offset_id] : 0;
         data_for_reduction += (laneid + 32 < size_receptor) ? p_data[offset_id + 32] : 0;
 
-        auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
+        const float r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
 
         p_res[warpid] = r; 
     }
@@ -187,7 +185,7 @@ __global__ void kernel_gpu_tune<96>( const float* __restrict__ p_data, const int
         data_for_reduction += (laneid + 32 < size_receptor) ? p_data[offset_id + 32] : 0;
         data_for_reduction += (laneid + 64 < size_receptor) ? p_data[offset_id + 64] : 0;
 
-        auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
+        const float r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
 
         p_res[warpid] = r; 
     }
@@ -214,7 +212,7 @@ __global__ void kernel_gpu_tune<128>( const float* __restrict__ p_data, const in
         data_for_reduction += (laneid + 64 < size_receptor) ? p_data[offset_id + 64] : 0;
         data_for_reduction += (laneid + 96 < size_receptor) ? p_data[offset_id + 96] : 0;
 
-        auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
+        const float r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
 
         p_res[warpid] = r; 
     }
@@ -233,6 +231,7 @@ int main(int argc, const char * argv[]) {
     std::vector<float> v_res(size-1);
     std::vector<float> v_res_gpu(size-1);
     std::vector<float> v_res_gpu2(size-1);
+    std::vector<float> v_res_gpu3(size-1);
     init_cpu(v_data,v_offset,v_size, min, max);
 
     //gpu
@@ -242,7 +241,7 @@ int main(int argc, const char * argv[]) {
     float* p_res;
 
 
-   //  std::cout << " size data " << v_data.size() << " \n";
+     std::cout << " size data " << v_data.size() << " \n";
 
     cudaMalloc((void**)&p_offset, v_offset.size()*sizeof(int));
     cudaMalloc((void**)&p_size, v_offset.size()*sizeof(int));
@@ -261,10 +260,13 @@ int main(int argc, const char * argv[]) {
 
     cudaEvent_t start_original, stop_original;
     cudaEvent_t start_64, stop_64;
+    cudaEvent_t start_shared, stop_shared;
     cudaEventCreate(&start_original);
     cudaEventCreate(&start_64);
+    cudaEventCreate(&start_shared);
     cudaEventCreate(&stop_original);
     cudaEventCreate(&stop_64);
+    cudaEventCreate(&stop_shared);
 
     cudaEventRecord(start_original);
     kernel_gpu_original<<<block,thread>>>(p_data,p_offset,p_res,v_data.size(),v_res.size());
@@ -273,44 +275,54 @@ int main(int argc, const char * argv[]) {
     cudaMemcpy(&v_res_gpu[0],p_res,v_res_gpu.size()*sizeof(float),cudaMemcpyDeviceToHost);
     cudaMemset(p_res,0,v_res_gpu.size()*sizeof(float));
 
-
     cudaEventRecord(start_64);
-    if(max <= 32)
-        kernel_gpu_tune<32><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
-    else if ( max <= 64)
-        kernel_gpu_tune<64><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
-    else if ( max <= 96)
-        kernel_gpu_tune<96><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
-    else 
-        kernel_gpu_tune<128><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
+    kernel_gpu_tune<32><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
     cudaEventRecord(stop_64); 
 
+    cudaEventRecord(start_shared);
+    kernel_gpu_shared<<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
+    cudaEventRecord(stop_shared); 
+
+//  if(max <= 32)
+    //  kernel_gpu_tune<32><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
+//  else if ( max <= 64)
+//      kernel_gpu_tune<64><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
+//  else if ( max <= 96)
+//      kernel_gpu_tune<96><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
+//  else 
+//      kernel_gpu_tune<128><<<block,thread>>>(p_data,p_offset, p_size,p_res,v_data.size(),v_res.size());
+
     cudaMemcpy(&v_res_gpu2[0],p_res,v_res_gpu2.size()*sizeof(float),cudaMemcpyDeviceToHost);
+    cudaMemcpy(&v_res_gpu3[0],p_res,v_res_gpu3.size()*sizeof(float),cudaMemcpyDeviceToHost);
 
     cudaEventSynchronize(stop_original);
     cudaEventSynchronize(stop_64);
+    cudaEventSynchronize(stop_shared);
   
    float milliseconds_original = 0;
    float milliseconds_64 = 0;
+   float milliseconds_shared = 0;
 
    cudaEventElapsedTime(&milliseconds_original, start_original, stop_original);
    cudaEventElapsedTime(&milliseconds_64, start_64, stop_64);
+   cudaEventElapsedTime(&milliseconds_shared, start_shared, stop_shared);
 
     auto sum_cpu = std::accumulate(v_res.begin(), v_res.end(), 0.);
     auto sum_gpu_original = std::accumulate(v_res_gpu.begin(), v_res_gpu.end(), 0.);
     auto sum_gpu_tune = std::accumulate(v_res_gpu2.begin(), v_res_gpu2.end(), 0.);
+    auto sum_gpu_shared = std::accumulate(v_res_gpu3.begin(), v_res_gpu3.end(), 0.);
 
-//  std::cout << " memory allocated : data " << v_data.size()*sizeof(float)/1048576. << " [mB]\n ";
-//  std::cout << " memory allocated : offset " << v_offset.size()*sizeof(float)/1048576. << " [mB]\n ";
-//  std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
-//  std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
-//  std::cout << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << std::endl;
+    std::cout << " memory allocated : data " << v_data.size()*sizeof(float)/1048576. << " [mB]\n ";
+    std::cout << " memory allocated : offset " << v_offset.size()*sizeof(float)/1048576. << " [mB]\n ";
+    std::cout << " memory allocated : size  " << v_size.size()*sizeof(float)/1048576. << " [mB]\n ";
+    std::cout << " memory allocated : res  " << v_res_gpu.size()*sizeof(float)/1048576. << " [mB]\n ";
+    std::cout << " sum cpu " << sum_cpu << " sum gpu original " << sum_gpu_original << " sum gpu tune " << sum_gpu_tune << " sum gpu shared " << sum_gpu_shared <<  std::endl;
 
 //  for(int i = 0 ; i < size-1; ++i)
 //     std::cout << " reduction: "<< i << " range ["  << v_offset[i] <<","<< v_offset[i+1]  << "], cpu:" << v_res[i]  << ", gpu:" << v_res_gpu[i] << ", gpu2:" << v_res_gpu2[i]<< std::endl;
 
     // insert code here...
 //  std::cout << " min " << min << " max " << max << " time cpu:" << elapsed_seconds.count()*1000 << " [ms], gpu original " << milliseconds_original << " [ms], gpu tune " << milliseconds_64  << " [ms] \n ";
-    std::cout << size << "," << min << "," << max << "," <<  elapsed_seconds.count()*1000 << "," << milliseconds_original << "," << milliseconds_64  << "\n ";
+    std::cout << size << "," << min << "," << max << "," <<  elapsed_seconds.count()*1000 << "," << milliseconds_original << "," << milliseconds_64  << "," <<    milliseconds_shared << "\n ";
     return 0;
 }
