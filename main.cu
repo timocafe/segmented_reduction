@@ -84,13 +84,19 @@ __forceinline__ __device__ unsigned lane_id()
 
 template<int N>
 __global__ void kernel_gpu_tune( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res);
-
+/*
 template<>
 __global__ void kernel_gpu_tune<32>( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
     float data_for_reduction = 0;
     const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
+    const int size_buffer_shared_memory = 16384;
+    __shared__ float sdata[size_buffer_shared_memory]; // 256 * 64
 
-    for (int in = tid; in  < 32*size_res; in += (blockDim.x * gridDim.x)) {
+    int n_tid = tid; // first iteration we start at 0
+   
+    const int block_by_grid_dim = blockDim.x * gridDim.x;
+
+    for (int in = tid; in  < 32*size_res; in += block_by_grid_dim) {
     
         const int warpid = in/32;
         const int laneid = lane_id();
@@ -98,10 +104,37 @@ __global__ void kernel_gpu_tune<32>( const float* __restrict__ p_data, const int
         //get the value from the offset only the thread 0 (lane id) of the warp
         const int offset_value = p_offset[warpid];
         const int size_receptor = p_size[warpid];
-     
-        const int offset_id = laneid + offset_value;
+        const int offset_id = (laneid + offset_value);
 
-        data_for_reduction = (offset_id < offset_value+size_receptor) ? p_data[offset_id] : 0;
+        sdata[tid] = p_data[n_tid];
+        __syncthreads();   
+ 
+        data_for_reduction = (laneid < size_receptor) ? s_data[offset_id] : 0;
+
+        auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
+
+        p_res[warpid] = r; 
+        n_tid = ????;
+    }
+}
+*/
+template<>
+__global__ void kernel_gpu_tune<32>( const float* __restrict__ p_data, const int* __restrict__ p_offset, const int* __restrict__ p_size, float* __restrict__ p_res, int size_data, int size_res){
+    float data_for_reduction = 0;
+    const int tid = (blockIdx.x*blockDim.x+threadIdx.x);
+    const int block_by_grid_dim = blockDim.x * gridDim.x;
+
+    for (int in = tid; in  < 32*size_res; in += block_by_grid_dim) {
+    
+        const int warpid = in/32;
+        const int laneid = lane_id();
+
+        //get the value from the offset only the thread 0 (lane id) of the warp
+        const int offset_value = p_offset[warpid];
+        const int size_receptor = p_size[warpid];
+        const int offset_id = (laneid + offset_value);
+
+        data_for_reduction = (laneid < size_receptor) ? p_data[offset_id] : 0;
 
         auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
 
@@ -125,8 +158,8 @@ __global__ void kernel_gpu_tune<64>( const float* __restrict__ p_data, const int
      
         const int offset_id = laneid + offset_value;
 
-        data_for_reduction = (offset_id < offset_value+size_receptor) ? p_data[offset_id] : 0;
-        data_for_reduction += (offset_id + 32 < offset_value+size_receptor) ? p_data[offset_id + 32] : 0;
+        data_for_reduction = (laneid < size_receptor) ? p_data[offset_id] : 0;
+        data_for_reduction += (laneid + 32 < size_receptor) ? p_data[offset_id + 32] : 0;
 
         auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
 
@@ -150,9 +183,9 @@ __global__ void kernel_gpu_tune<96>( const float* __restrict__ p_data, const int
      
         const int offset_id = laneid + offset_value;
 
-        data_for_reduction = (offset_id < offset_value+size_receptor) ? p_data[offset_id] : 0;
-        data_for_reduction += (offset_id + 32 < offset_value+size_receptor) ? p_data[offset_id + 32] : 0;
-        data_for_reduction += (offset_id + 64 < offset_value+size_receptor) ? p_data[offset_id + 64] : 0;
+        data_for_reduction =  (laneid < size_receptor) ? p_data[offset_id] : 0;
+        data_for_reduction += (laneid + 32 < size_receptor) ? p_data[offset_id + 32] : 0;
+        data_for_reduction += (laneid + 64 < size_receptor) ? p_data[offset_id + 64] : 0;
 
         auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
 
@@ -176,10 +209,10 @@ __global__ void kernel_gpu_tune<128>( const float* __restrict__ p_data, const in
      
         const int offset_id = laneid + offset_value;
 
-        data_for_reduction = (offset_id < offset_value+size_receptor) ? p_data[offset_id] : 0;
-        data_for_reduction += (offset_id + 32 < offset_value+size_receptor) ? p_data[offset_id + 32] : 0;
-        data_for_reduction += (offset_id + 64 < offset_value+size_receptor) ? p_data[offset_id + 64] : 0;
-        data_for_reduction += (offset_id + 96 < offset_value+size_receptor) ? p_data[offset_id + 96] : 0;
+        data_for_reduction = (laneid < offset_value+size_receptor) ? p_data[offset_id] : 0;
+        data_for_reduction += (laneid + 32 < size_receptor) ? p_data[offset_id + 32] : 0;
+        data_for_reduction += (laneid + 64 < size_receptor) ? p_data[offset_id + 64] : 0;
+        data_for_reduction += (laneid + 96 < size_receptor) ? p_data[offset_id + 96] : 0;
 
         auto r = warpReduceSum(data_for_reduction,full); // r all the same value for a warp
 
